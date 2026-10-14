@@ -23,6 +23,15 @@ const pollMs = Number(process.env.WORKER_POLL_MS ?? 1000);
 const engine = new PromptForgeEngine(createPromptForgeProviderFromEnvironment());
 const workerId=process.env.WORKER_ID??`worker-${randomUUID()}`;
 const operationalLeaseSeconds=Math.max(30,Number(process.env.OPERATIONAL_JOB_LEASE_SECONDS??120));
+const operationalLeaseSeconds = Number(process.env.OPERATIONAL_JOB_LEASE_SECONDS ?? 300);
+// Initialize the model only for a transformation. Storage and operational
+// processing must remain available while model credentials are unconfigured.
+let engine: PromptForgeEngine | null = null;
+function getEngine() {
+  if (!engine) engine = new PromptForgeEngine(createPromptForgeProviderFromEnvironment());
+  return engine;
+}
+const workerId=process.env.WORKER_ID??`worker-${randomUUID()}`;
 let artifactStore:ArtifactStore|null=null;
 
 function getArtifactStore() {
@@ -77,7 +86,7 @@ async function claim(): Promise<Claimed | null> {
 
 async function processOne(item: Claimed) {
   try {
-    const built = await engine.transform({
+    const built = await getEngine().transform({
       name: item.requested_name,
       agentClass: item.requested_class,
       sourcePrompt: item.content_text,
@@ -531,6 +540,7 @@ type OperationalJob={
   payload:Record<string,unknown>;
   attempts:number;
   max_attempts:number;
+  lock_token:string;
 };
 
 async function heartbeat() {
@@ -592,6 +602,7 @@ async function claimOperationalJob():Promise<OperationalJob|null> {
              AND locked_at IS NOT NULL
              AND locked_at<=now()-($2::text||' seconds')::interval
              AND attempts<max_attempts)
+           OR (status='RUNNING' AND locked_at < now() - ($2::text || ' seconds')::interval)
          )
          ORDER BY available_at,created_at
          FOR UPDATE SKIP LOCKED
@@ -603,6 +614,11 @@ async function claimOperationalJob():Promise<OperationalJob|null> {
        WHERE j.id=next.id
        RETURNING j.id,j.workspace_id,j.job_type,j.payload,j.attempts,j.max_attempts`,
       [workerId,String(operationalLeaseSeconds)],
+       SET status='RUNNING',locked_at=now(),locked_by=$1,lock_token=gen_random_uuid(),attempts=j.attempts+1
+       FROM next
+       WHERE j.id=next.id
+       RETURNING j.id,j.workspace_id,j.job_type,j.payload,j.attempts,j.max_attempts,j.lock_token`,
+      [workerId, String(operationalLeaseSeconds)],
     );
     return result.rows[0]??null;
   });
@@ -614,6 +630,8 @@ async function finishOperationalJob(job:OperationalJob) {
      SET status='COMPLETED',completed_at=now(),locked_at=NULL,locked_by=NULL,last_error=NULL
      WHERE id=$1`,
     [job.id],
+     WHERE id=$1 AND locked_by=$2 AND lock_token=$3`,
+    [job.id,workerId,job.lock_token],
   );
 }
 
@@ -629,6 +647,15 @@ async function failOperationalJob(job:OperationalJob,error:unknown) {
        WHERE id=$4`,
       [dead?"DEAD":"RETRY",reason.slice(0,2000),String(delaySeconds),job.id],
     );
+    const updated=await client.query(
+      `UPDATE operational_jobs
+       SET status=$1,last_error=$2,available_at=CASE WHEN $1='RETRY' THEN now()+($3::text||' seconds')::interval ELSE available_at END,
+           locked_at=NULL,locked_by=NULL
+           ,lock_token=NULL
+       WHERE id=$4 AND locked_by=$5 AND lock_token=$6`,
+      [dead?"DEAD":"RETRY",reason.slice(0,2000),String(delaySeconds),job.id,workerId,job.lock_token],
+    );
+    if(!updated.rowCount) return;
     const artifactObjectId=typeof job.payload.artifactObjectId==="string"?job.payload.artifactObjectId:null;
     if(artifactObjectId) {
       await client.query(

@@ -39,6 +39,13 @@ pre{white-space:pre-wrap;word-break:break-word;background:#101317;color:#e7edf4;
 <div id="loginError" class="error"></div>
 </section>
 
+<section id="submissionsCard" class="card hidden">
+<h2>Saved submissions</h2>
+<p><button id="refreshSubmissions">Refresh submissions</button> <button id="newIntake">New intake</button></p>
+<div id="submissionsError" class="error" role="alert"></div>
+<div id="submissionsList"></div>
+<button id="moreSubmissions" class="hidden">Load more</button>
+</section>
 <section id="intakeCard" class="card hidden">
 <h2>New agent intake</h2>
 <div class="grid">
@@ -62,7 +69,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#101317;color:#e7edf4;
 <h2>Transformation</h2><span id="statusBadge" class="badge">QUEUED</span>
 </div>
 <div id="statusMeta" class="sub"></div>
-<h3>Reviewer explanation</h3><pre id="explanation">Waiting for worker…</pre>
+<p><button id="refreshTransformation">Refresh selected submission</button></p><h3>Revision history</h3><div id="revisionHistory"></div><h3>Reviewer explanation</h3><pre id="explanation">Waiting for worker…</pre>
 <h3>Governance validation</h3><pre id="validation">Waiting for worker…</pre>
 <h3>Candidate diff</h3><pre id="diff">Waiting for worker…</pre>
 <h3>PromptForge stages</h3><pre id="stages">Waiting for worker…</pre>
@@ -176,27 +183,48 @@ let currentHumanExecutionId=null;
 let currentAgentVersionId=null;
 let currentPackageRecordId=null;
 let currentPublicationRecordId=null;
+let nextSubmissionOffset=null;
+let selectionGeneration=0;
 const q=(id)=>document.getElementById(id);
+function clearSession(){
+  token=null;sessionStorage.removeItem("foundry_token");selectionGeneration++;
+  currentTransformationId=currentEvaluationPlanId=currentHumanExecutionId=currentAgentVersionId=currentPackageRecordId=currentPublicationRecordId=null;
+  q("loginCard").classList.remove("hidden");
+  for(const id of ["intakeCard","submissionsCard","statusCard"])q(id).classList.add("hidden");
+  q("sessionBadge").textContent="Signed out";
+}
 async function api(path,options={}){
   const headers={"content-type":"application/json",...(options.headers||{})};
   if(token) headers.authorization="Bearer "+token;
   const res=await fetch(API+path,{...options,headers});
   const body=await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(body.error||("HTTP "+res.status));
+  if(!res.ok){
+    if(res.status===401 && token){clearSession();q("loginError").textContent="Session expired. Please sign in again.";}
+    throw new Error(body.error||("HTTP "+res.status));
+  }
   return body;
 }
 function showApp(data){
   q("loginCard").classList.add("hidden");q("intakeCard").classList.remove("hidden");
   q("sessionBadge").textContent=data.user.email;
+  q("submissionsCard").classList.remove("hidden");
   const select=q("project");select.innerHTML="";
   for(const ws of data.workspaces) for(const p of ws.projects){
     const o=document.createElement("option");o.value=p.id;o.textContent=ws.name+" / "+p.name;select.appendChild(o);
   }
 }
-async function restore(){if(!token)return;try{showApp(await api("/v1/me"));}catch{token=null;sessionStorage.removeItem("foundry_token");}}
+async function restore(){
+  if(!token)return;
+  try{showApp(await api("/v1/me"));}
+  catch(e){
+    if(["unauthorized","invalid_credentials"].includes(e.message)){clearSession();}
+    q("loginError").textContent=e.message;return;
+  }
+  try{await restoreSelection();}catch(e){q("submissionsError").textContent=e.message;}
+}
 q("loginButton").onclick=async()=>{q("loginError").textContent="";try{
   const data=await api("/v1/auth/login",{method:"POST",body:JSON.stringify({email:q("email").value,password:q("password").value})});
-  token=data.token;sessionStorage.setItem("foundry_token",token);showApp(data);
+  token=data.token;sessionStorage.setItem("foundry_token",token);showApp(data);await restoreSelection();
 }catch(e){q("loginError").textContent=e.message;}};
 q("submitButton").onclick=async()=>{q("intakeError").textContent="";q("submitButton").disabled=true;try{
   const data=await api("/v1/intake",{method:"POST",body:JSON.stringify({
@@ -204,12 +232,14 @@ q("submitButton").onclick=async()=>{q("intakeError").textContent="";q("submitBut
     rightsStatus:q("rights").value,sourcePrompt:q("sourcePrompt").value
   })});
   q("statusCard").classList.remove("hidden");q("statusBadge").textContent=data.status;
-  currentTransformationId=data.transformationId;
-  await poll(data.transformationId);
+  await loadSubmissions();
+  await openSubmission(data.transformationId);
 }catch(e){q("intakeError").textContent=e.message;}finally{q("submitButton").disabled=false;}};
 async function poll(id){
+  const generation=selectionGeneration;
   for(let i=0;i<120;i++){
     const data=await api("/v1/transformations/"+id);
+    if(generation!==selectionGeneration || currentTransformationId!==id)return;
     q("statusBadge").textContent=data.status;
     q("statusMeta").textContent=[
       data.registryId,
@@ -240,7 +270,18 @@ async function poll(id){
     } else {
       q("revisionButton").classList.add("hidden");
     }
-    if(data.semanticReview) q("reviewButton").disabled=true;
+    q("reviewButton").disabled=!!data.semanticReview || data.status!=="REQUIRES_REVIEW";
+    currentAgentVersionId=data.agentVersionId||null;
+    renderLineage(data.revisionLineage||[]);
+    if(!["QUEUED","PROCESSING"].includes(data.status)) {
+      await loadSubmissions();
+      if(generation!==selectionGeneration)return;
+      if(data.evaluationPlanId) await pollEvaluationPlan(data.evaluationPlanId);
+      else q("evaluationState").textContent="No evaluation plan.";
+      if(generation!==selectionGeneration)return;
+      if(currentAgentVersionId) await refreshAuthorityState();
+      else q("authorityState").textContent="No agent version saved.";
+    }
     if(!["QUEUED","PROCESSING"].includes(data.status)) return;
     await new Promise(r=>setTimeout(r,1000));
   }
@@ -249,9 +290,11 @@ async function poll(id){
 
 
 async function pollEvaluationPlan(id){
+  const generation=selectionGeneration;
   currentEvaluationPlanId=id;
   for(let i=0;i<120;i++){
     const data=await api("/v1/evaluation-plans/"+id);
+    if(generation!==selectionGeneration)return;
     q("evaluationState").textContent=JSON.stringify(data,null,2);
     currentAgentVersionId=data.plan?.agent_version_id||currentAgentVersionId;
     const awaiting=(data.executions||[]).find(x=>x.status==="AWAITING_HUMAN");
@@ -278,10 +321,12 @@ async function pollEvaluationPlan(id){
   }
 }
 q("createEvaluationPlanButton").onclick=async()=>{
+  const generation=selectionGeneration;
   if(!currentTransformationId)return;
   q("evaluationError").textContent="";
   try{
     const data=await api("/v1/transformations/"+currentTransformationId+"/evaluation-plan",{method:"POST",body:"{}"});
+    if(generation!==selectionGeneration)return;
     q("createEvaluationPlanButton").classList.add("hidden");
     await pollEvaluationPlan(data.planId);
   }catch(e){q("evaluationError").textContent=e.message;}
@@ -318,9 +363,11 @@ q("certReadinessButton").onclick=async()=>{
 
 
 async function refreshAuthorityState(){
+  const generation=selectionGeneration;
   if(!currentAgentVersionId)return;
   try{
     const data=await api("/v1/agent-versions/"+currentAgentVersionId+"/authority-state");
+    if(generation!==selectionGeneration)return;
     q("authorityState").textContent=JSON.stringify(data,null,2);
     const packages=data.releasePackages||[];
     const publications=data.publications||[];
@@ -356,10 +403,11 @@ async function refreshAuthorityState(){
   }catch(e){q("evaluationError").textContent=e.message;}
 }
 q("certificationButton").onclick=async()=>{
+  const generation=selectionGeneration;
   if(!currentEvaluationPlanId)return;
   q("evaluationError").textContent="";
   try{
-    const evidence=q("certificationEvidence").value.split("\n").map(x=>x.trim()).filter(Boolean);
+    const evidence=q("certificationEvidence").value.split("\\n").map(x=>x.trim()).filter(Boolean);
     const data=await api("/v1/evaluation-plans/"+currentEvaluationPlanId+"/certification",{
       method:"POST",
       body:JSON.stringify({
@@ -368,6 +416,7 @@ q("certificationButton").onclick=async()=>{
         evidence
       })
     });
+    if(generation!==selectionGeneration)return;
     currentAgentVersionId=data.agentVersionId;
     await refreshAuthorityState();
     await pollEvaluationPlan(currentEvaluationPlanId);
@@ -454,17 +503,71 @@ q("reviewButton").onclick=async()=>{
   }catch(e){q("reviewError").textContent=e.message;}
 };
 q("revisionButton").onclick=async()=>{
+  const generation=selectionGeneration;
   if(!currentTransformationId)return;
   q("reviewError").textContent="";
   try{
     const data=await api("/v1/transformations/"+currentTransformationId+"/revisions",{method:"POST",body:"{}"});
-    currentTransformationId=data.transformationId;
-    q("reviewButton").disabled=false;
+    if(generation!==selectionGeneration)return;
+    await openSubmission(data.transformationId);
     q("reviewRationale").value="";
     q("requestedChanges").value="";
-    await poll(currentTransformationId);
   }catch(e){q("reviewError").textContent=e.message;}
 };
+
+async function loadSubmissions(append=false){
+  q("submissionsError").textContent="";
+  try{
+    const data=await api("/v1/transformations?offset="+(append?nextSubmissionOffset||0:0));
+    if(!append)q("submissionsList").replaceChildren();
+    for(const item of data.submissions){
+      const row=document.createElement("p");
+      const label=document.createElement("span");
+      label.textContent=[item.requested_name,item.registry_id,item.version,item.semantic_approval_status||item.status,item.evaluation_status,item.created_at].filter(Boolean).join(" · ")+" ";
+      const button=document.createElement("button");button.textContent="Open";
+      button.onclick=()=>openSubmission(item.id).catch(e=>q("submissionsError").textContent=e.message);
+      row.append(label,button);q("submissionsList").append(row);
+    }
+    if(!data.submissions.length&&!append)q("submissionsList").textContent="No saved submissions.";
+    nextSubmissionOffset=data.nextOffset;
+    q("moreSubmissions").classList.toggle("hidden",nextSubmissionOffset===null);
+  }catch(e){q("submissionsError").textContent=e.message;}
+}
+function renderLineage(lineage){
+  q("revisionHistory").replaceChildren();
+  if(!lineage.length){q("revisionHistory").textContent="No revisions.";return;}
+  for(const entry of lineage){
+    const row=document.createElement("p");
+    for(const [label,id] of [["Open parent",entry.parent_transformation_id],["Open revision",entry.child_transformation_id]]){
+      const button=document.createElement("button");button.textContent=label;button.disabled=id===currentTransformationId;
+      button.onclick=()=>openSubmission(id).catch(e=>q("submissionsError").textContent=e.message);row.append(button,document.createTextNode(" "));
+    }
+    q("revisionHistory").append(row);
+  }
+}
+async function openSubmission(id){
+  if(!/^[0-9a-f-]{36}$/i.test(id))throw new Error("Invalid submission ID");
+  selectionGeneration++;
+  currentTransformationId=id;
+  currentEvaluationPlanId=currentHumanExecutionId=currentAgentVersionId=currentPackageRecordId=currentPublicationRecordId=null;
+  history.replaceState(null,"","#submission="+id);
+  q("statusCard").classList.remove("hidden");
+  for(const key of ["explanation","validation","diff","stages","candidate","record","reviewState","evaluationState","authorityState"])q(key).textContent="Loading saved submission…";
+  for(const key of ["reviewError","evaluationError","reviewRationale","requestedChanges","packageIdempotencyKey","publicationIdempotencyKey","registrationIdempotencyKey"]){q(key).textContent="";if("value" in q(key))q(key).value="";}
+  for(const key of ["revisionButton","createEvaluationPlanButton","humanEvaluationControls","certReadinessControls","certificationControls","releaseApprovalControls","packagingControls","publicationControls","registrationControls"])q(key).classList.add("hidden");
+  q("reviewButton").disabled=true;
+  await poll(id);
+}
+async function restoreSelection(){
+  await loadSubmissions();
+  const id=new URLSearchParams(location.hash.slice(1)).get("submission");
+  if(id)await openSubmission(id);
+}
+q("refreshSubmissions").onclick=()=>loadSubmissions();
+q("moreSubmissions").onclick=()=>loadSubmissions(true);
+q("refreshTransformation").onclick=()=>openSubmission(currentTransformationId).catch(e=>q("submissionsError").textContent=e.message);
+q("newIntake").onclick=()=>{selectionGeneration++;currentTransformationId=null;history.replaceState(null,"","#");q("statusCard").classList.add("hidden");q("intakeCard").scrollIntoView();};
+window.addEventListener("hashchange",()=>restoreSelection().catch(e=>q("submissionsError").textContent=e.message));
 
 restore();
 </script>

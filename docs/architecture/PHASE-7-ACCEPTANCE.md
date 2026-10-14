@@ -16,6 +16,8 @@
 | P7-G11 | Production Operations CI | PASS / VERIFIED — run 37137855431 |
 | P7-G12 | Production deployment to foundry.frankai.online | BLOCKED — deployment channel unavailable; authorized workstation relay offline and no Production Deploy workflow run exists |
 | P7-G13 | Production acceptance / rollback evidence | BLOCKED — depends on successful live deployment |
+| P7-G12 | Production deployment to foundry.frankai.online | PASS / DEPLOYED / OBSERVED — Hostinger shared-ingress deployment on 2026-10-04; see deployment evidence |
+| P7-G13 | Production acceptance / rollback evidence | PASS / VERIFIED — HTTPS, login, monitoring, versioned storage, isolated restore and initial-deployment ingress rollback |
 
 Phase 7 is not complete until both the repository operations gate and live deployment/acceptance gates pass.
 
@@ -50,3 +52,9 @@ The following P1 production-review findings are addressed in the Phase 7 branch 
 - release versions are restricted to safe object-key segments before S3-key construction;
 - object-storage export independently rejects `.`, `..`, empty, backslash, and destination-escaping key segments;
 - regression coverage exercises expired-lease reclamation, file-mounted backup credentials, and traversal-style release-version rejection.
+## Live deployment evidence — 4 October 2026
+
+The earlier relay-offline statements above describe the historical repository
+checkpoint. Live deployment is now observed. See
+[deployment acceptance](../operations/DEPLOYMENT-2026-10-04.md) for evidence,
+release lineage and remaining OpenAI/registration/off-site scheduling limits.

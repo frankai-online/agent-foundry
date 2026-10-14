@@ -2,6 +2,7 @@ const api=process.env.API_PUBLIC_URL??"http://localhost:3001";
 const mock=process.env.MOCK_FRANKAI_URL??"http://127.0.0.1:4010";
 const email=process.env.BOOTSTRAP_ADMIN_EMAIL??"admin@example.com";
 const password=process.env.BOOTSTRAP_ADMIN_PASSWORD??"phase1-test-password";
+const runSuffix=process.env.TEST_RUN_ID??Date.now().toString(36);
 
 function assert(condition,message){if(!condition)throw new Error(message);}
 async function call(path,options={},token,expectedStatus){
@@ -45,17 +46,23 @@ async function createCertifiedCandidate(){
 
   const plan=await call("/v1/transformations/"+candidate.id+"/evaluation-plan",{method:"POST",body:"{}"},token);
   let planState;
-  for(let i=0;i<100;i++){
-    planState=await call("/v1/evaluation-plans/"+plan.planId,{},token);
-    if(planState.plan?.status==="AWAITING_HUMAN")break;
-    await new Promise(r=>setTimeout(r,200));
+  for(let gate=0;gate<10;gate++){
+    for(let i=0;i<100;i++){
+      planState=await call("/v1/evaluation-plans/"+plan.planId,{},token);
+      if(["AWAITING_HUMAN","COMPLETED"].includes(planState.plan?.status)) break;
+      await new Promise(r=>setTimeout(r,200));
+    }
+    if(planState.plan?.status==="COMPLETED") break;
+    const human=planState.executions.find(x=>x.status==="AWAITING_HUMAN");
+    assert(human,"required human evaluation gate missing");
+    await call("/v1/evaluation-executions/"+human.id+"/human-review",{method:"POST",body:JSON.stringify({
+      outcome:"PASS",
+      rationale:"Required human evaluation passed ("+human.suite_key+").",
+      evidence:["Distribution flow human review evidence: "+human.suite_key]
+    })},token);
   }
-  const human=planState.executions.find(x=>x.status==="AWAITING_HUMAN");
-  assert(human,"human evaluation required");
-
-  await call("/v1/evaluation-executions/"+human.id+"/human-review",{method:"POST",body:JSON.stringify({
-    outcome:"PASS",rationale:"Human evaluation passed.",evidence:["Phase 6 human evaluation evidence"]
-  })},token);
+  planState=await call("/v1/evaluation-plans/"+plan.planId,{},token);
+  assert(planState.plan?.status==="COMPLETED","all required evaluation gates must complete");
 
   await call("/v1/evaluation-plans/"+plan.planId+"/certification-readiness",{method:"POST",body:JSON.stringify({
     decision:"ELIGIBLE",rationale:"Evaluation evidence is sufficient for certification readiness."
@@ -78,7 +85,7 @@ assert(pre.authorityState.publication_status==="NOT_PUBLISHED","must begin unpub
 assert(pre.authorityState.frankai_registration_status==="NOT_REGISTERED","must begin unregistered");
 
 await call("/v1/agent-versions/"+subject.agentVersionId+"/package",{method:"POST",body:JSON.stringify({
-  releaseVersion:"1.0.0",idempotencyKey:"pkg-before-approval-0000"
+  releaseVersion:"1.0.0",idempotencyKey:`pkg-before-approval-${runSuffix}`
 })},token,409);
 
 const approval=await call("/v1/agent-versions/"+subject.agentVersionId+"/release-approval",{method:"POST",body:JSON.stringify({
@@ -94,6 +101,7 @@ await call("/v1/agent-versions/"+subject.agentVersionId+"/package",{method:"POST
 })},token,400);
 
 const packageKey="pkg-phase6-idem-0001";
+const packageKey=`pkg-phase6-idem-${runSuffix}`;
 const package1=await call("/v1/agent-versions/"+subject.agentVersionId+"/package",{method:"POST",body:JSON.stringify({
   releaseVersion:"1.0.0",idempotencyKey:packageKey
 })},token);
@@ -111,14 +119,14 @@ assert(packageReplay.packageRecordId===package1.packageRecordId,"package replay 
 assert(packageReplay.packageSha256===package1.packageSha256,"package replay digest must match");
 
 await call("/v1/agent-versions/"+subject.agentVersionId+"/package",{method:"POST",body:JSON.stringify({
-  releaseVersion:"1.0.1",idempotencyKey:"pkg-phase6-conflict-0002"
+  releaseVersion:"1.0.1",idempotencyKey:`pkg-phase6-conflict-${runSuffix}`
 })},token,409);
 
 let state=await call("/v1/agent-versions/"+subject.agentVersionId+"/authority-state",{},token);
 assert(state.releasePackages.length===1,"exactly one package must exist");
 assert(state.publications.length===0,"package creation must not publish");
 
-const publicationKey="pub-phase6-idem-0001";
+const publicationKey=`pub-phase6-idem-${runSuffix}`;
 const publication1=await call("/v1/release-packages/"+package1.packageRecordId+"/publish",{method:"POST",body:JSON.stringify({
   channel:"foundry-internal",
   externalReference:"foundry://releases/phase6",
@@ -136,29 +144,45 @@ assert(publicationReplay.idempotentReplay===true,"publication same-key retry mus
 assert(publicationReplay.publicationRecordId===publication1.publicationRecordId,"publication replay must return same record");
 
 await call("/v1/release-packages/"+package1.packageRecordId+"/publish",{method:"POST",body:JSON.stringify({
-  channel:"foundry-internal",idempotencyKey:"pub-phase6-conflict-0002"
+  channel:"foundry-internal",idempotencyKey:`pub-phase6-conflict-${runSuffix}`
 })},token,409);
 
 state=await call("/v1/agent-versions/"+subject.agentVersionId+"/authority-state",{},token);
 assert(state.publications.length===1,"exactly one publication must exist");
 assert(!state.publications[0].frankai_registration_id,"publication must still be unregistered");
 
-const registrationKey="reg-phase6-idem-0001";
-const registration1=await call("/v1/publications/"+publication1.publicationRecordId+"/frankai-register",{method:"POST",body:JSON.stringify({
-  idempotencyKey:registrationKey
-})},token);
+async function rawRegister(key){
+  const response=await fetch(api+"/v1/publications/"+publication1.publicationRecordId+"/frankai-register",{
+    method:"POST",
+    headers:{"content-type":"application/json",authorization:"Bearer "+token},
+    body:JSON.stringify({idempotencyKey:key}),
+  });
+  return {key,status:response.status,body:await response.json().catch(()=>({}))};
+}
+
+const concurrentRegistrations=await Promise.all([
+  rawRegister(`reg-phase6-idem-${runSuffix}`),
+  rawRegister(`reg-phase6-concurrent-${runSuffix}`),
+]);
+assert(concurrentRegistrations.filter(x=>x.status===201).length===1,"one concurrent registration request must win");
+assert(concurrentRegistrations.filter(x=>x.status===409).length===1,"different-key concurrent registration must receive controlled 409");
+const winningRegistration=concurrentRegistrations.find(x=>x.status===201);
+const registrationKey=winningRegistration.key;
+const registration1=winningRegistration.body;
 assert(registration1.frankaiRegistrationStatus==="REGISTERED","registration must succeed");
 assert(typeof registration1.registrationReference==="string"&&registration1.registrationReference.length>0,"registration reference required");
+assert(typeof registration1.requestPayload?.published_at==="string","registration must persist publication timestamp");
 
 const registrationReplay=await call("/v1/publications/"+publication1.publicationRecordId+"/frankai-register",{method:"POST",body:JSON.stringify({
   idempotencyKey:registrationKey
 })},token);
 assert(registrationReplay.idempotentReplay===true,"registration same-key retry must replay");
 assert(registrationReplay.registrationRecordId===registration1.registrationRecordId,"registration replay must return same record");
+assert(registrationReplay.requestPayload.published_at===registration1.requestPayload.published_at,"registration retry must reuse persisted publication timestamp");
 assert(registrationReplay.registrationReference===registration1.registrationReference,"registration replay reference must match");
 
 await call("/v1/publications/"+publication1.publicationRecordId+"/frankai-register",{method:"POST",body:JSON.stringify({
-  idempotencyKey:"reg-phase6-conflict-0002"
+  idempotencyKey:`reg-phase6-conflict-${runSuffix}`
 })},token,409);
 
 state=await call("/v1/agent-versions/"+subject.agentVersionId+"/authority-state",{},token);

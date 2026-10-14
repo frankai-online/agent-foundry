@@ -7,6 +7,9 @@ foundry.frankai.online {
 
   @metrics path /api/metrics
   respond @metrics 404
+  handle /api/metrics {
+    respond 404
+  }
 
   @api path /api/*
   handle @api {

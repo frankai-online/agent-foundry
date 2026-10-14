@@ -21,6 +21,7 @@ done
 
 : "${DATABASE_URL:?DATABASE_URL or DATABASE_URL_FILE is required}"
 
+if [ -f "$(dirname "$0")/load-secrets.sh" ]; then . "$(dirname "$0")/load-secrets.sh"; fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 root="${BACKUP_ROOT:-/backups}"
 mkdir -p "$root/$timestamp"

@@ -3,6 +3,8 @@ import { URL } from "node:url";
 import { digestSessionToken, issueSessionToken, normalizeEmail, verifyPassword } from "@agent-foundry/auth";
 import { query, transaction } from "@agent-foundry/db";
 import { canonicalJson, sha256Text, type RightsStatus } from "@agent-foundry/domain";
+import { assessContextualAuthorityContract, canonicalJson, sha256Text, type RightsStatus } from "@agent-foundry/domain";
+import { assertSafeObjectKeySegment } from "@agent-foundry/storage";
 import {
   buildReleaseBundle,
   buildPublicationPayload,
@@ -660,7 +662,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const body=await readJson(req);
     const requested=Array.isArray(body.suiteKeys)
       ? body.suiteKeys.filter((x):x is string=>typeof x==="string")
-      : ["core-governance-v1","human-semantic-quality-v1"];
+      : ["core-governance-v1","human-semantic-quality-v1","multi-turn-underspecification-v1"];
     const suiteKeys=[...new Set(requested)];
     if(!suiteKeys.length) return json(res,400,{error:"evaluation_suites_required"});
 
@@ -931,9 +933,11 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     try {
       const result=await transaction(async(client)=>{
         const plan=await client.query(
-          `SELECT p.agent_version_id,p.status,p.aggregate_outcome,av.status agent_version_status
+          `SELECT p.agent_version_id,p.status,p.aggregate_outcome,av.status agent_version_status,
+                  aps.document aps_document
            FROM evaluation_plans p
            JOIN agent_versions av ON av.id=p.agent_version_id
+           JOIN aps_specifications aps ON aps.agent_version_id=av.id
            WHERE p.id=$1
            FOR UPDATE`,
           [planId],
@@ -941,6 +945,11 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
         const item=plan.rows[0];
         if(!item) throw new Error("evaluation_plan_not_found");
         if(item.status!=="COMPLETED" || item.agent_version_status!=="EVALUATED") throw new Error("evaluation_not_complete");
+
+        const contextualAuthority=assessContextualAuthorityContract((item.aps_document??{}) as Record<string,any>);
+        if(decision==="ELIGIBLE" && !contextualAuthority.eligible) {
+          throw new Error(`contextual_authority_contract_not_certifiable: ${contextualAuthority.reasons.join("; ")}`);
+        }
 
         const existing=await client.query("SELECT 1 FROM certification_readiness_decisions WHERE agent_version_id=$1",[item.agent_version_id]);
         if(existing.rowCount) throw new Error("certification_readiness_already_recorded");
@@ -974,7 +983,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
            VALUES ($1,'certification_readiness_decided','agent_version',$2,$3,$4::jsonb)`,
           [
             user.id,item.agent_version_id,readiness.rows[0]!.id,
-            JSON.stringify({planId,decision,aggregateOutcome:item.aggregate_outcome,reviewerRole:role}),
+            JSON.stringify({planId,decision,aggregateOutcome:item.aggregate_outcome,reviewerRole:role,contextualAuthority}),
           ],
         );
 
@@ -989,7 +998,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       return json(res,200,result);
     } catch(error) {
       const message=error instanceof Error?error.message:String(error);
-      if(["evaluation_plan_not_found","evaluation_not_complete","certification_readiness_already_recorded"].includes(message) || message.includes("ELIGIBLE certification readiness requires PASS aggregate")) {
+      if(["evaluation_plan_not_found","evaluation_not_complete","certification_readiness_already_recorded"].includes(message) || message.includes("ELIGIBLE certification readiness requires PASS aggregate") || message.startsWith("contextual_authority_contract_not_certifiable")) {
         return json(res,409,{error:message});
       }
       throw error;
@@ -1020,12 +1029,12 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
           agent_version_id:string; status:string; aggregate_outcome:string;
           readiness_decision_id:string; readiness_decision:string;
           certification_status:string; certification_readiness_status:string;
-          aps_sha256:string;
+          aps_sha256:string; aps_document:Record<string,any>;
         }>(
           `SELECT p.agent_version_id,av.status,p.aggregate_outcome,
                   d.id readiness_decision_id,d.decision readiness_decision,
                   l.certification_status,l.certification_readiness_status,
-                  aps.sha256 aps_sha256
+                  aps.sha256 aps_sha256,aps.document aps_document
            FROM evaluation_plans p
            JOIN agent_versions av ON av.id=p.agent_version_id
            JOIN lifecycle_readiness l ON l.agent_version_id=av.id
@@ -1041,6 +1050,11 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
         if(item.readiness_decision!=="ELIGIBLE" || item.certification_readiness_status!=="ELIGIBLE" || item.certification_status!=="ELIGIBLE") {
           throw new Error("agent_not_certification_eligible");
         }
+        const contextualAuthority=assessContextualAuthorityContract(item.aps_document??{});
+        if(decision==="CERTIFY" && !contextualAuthority.eligible) {
+          throw new Error(`contextual_authority_contract_not_certifiable: ${contextualAuthority.reasons.join("; ")}`);
+        }
+
         const existing=await client.query("SELECT 1 FROM certification_records WHERE agent_version_id=$1",[item.agent_version_id]);
         if(existing.rowCount) throw new Error("certification_already_recorded");
 
@@ -1050,6 +1064,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
           readinessDecisionId:item.readiness_decision_id,
           canonicalApsSha256:item.aps_sha256,
           evaluationAggregate:item.aggregate_outcome,
+          contextualAuthority,
         };
 
         const record=await client.query<{id:string;created_at:string}>(
@@ -1120,7 +1135,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       return json(res,200,result);
     } catch(error) {
       const message=error instanceof Error?error.message:String(error);
-      if(["certification_context_missing","agent_not_evaluated","agent_not_certification_eligible","certification_already_recorded"].includes(message) || message.includes("certification requires")) {
+      if(["certification_context_missing","agent_not_evaluated","agent_not_certification_eligible","certification_already_recorded"].includes(message) || message.includes("certification requires") || message.startsWith("contextual_authority_contract_not_certifiable")) {
         return json(res,409,{error:message});
       }
       throw error;
@@ -1239,6 +1254,8 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     if(!/^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$/.test(releaseVersion) || releaseVersion.length>80) {
       return json(res,400,{error:"invalid_release_version"});
     }
+    try { assertSafeObjectKeySegment(releaseVersion,"release_version"); }
+    catch { return json(res,400,{error:"release_version_invalid"}); }
     if(idempotencyKey.length<8) return json(res,400,{error:"idempotency_key_required"});
 
     try {
@@ -1478,6 +1495,7 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
         const runtimeTargets=Array.isArray(item.package_manifest?.runtimeTargets)
           ? item.package_manifest.runtimeTargets
           : ["generic","openai"];
+        const publishedAt=new Date().toISOString();
         const payload=buildPublicationPayload({
           packageRecordId,
           packageSha256:item.package_sha256,
@@ -1488,15 +1506,48 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
           channel,
           rightsStatus:item.rights_status,
           runtimeTargets,
+          apsVersion:item.package_manifest?.apsVersion,
+          capabilities:item.package_manifest?.capabilities,
+          evaluationAggregate:item.package_manifest?.evaluationAggregate,
+          evaluationRequiredOutcome:item.package_manifest?.evaluationRequiredOutcome,
+          evaluationRunIds:item.package_manifest?.evaluationRunIds,
+          publishedAt,
         });
 
         const record=await client.query<{id:string}>(
           `INSERT INTO publication_records(
              release_package_record_id,channel,external_reference,published_by_user_id,
-             idempotency_key,publication_payload,status
-           ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,'PUBLISHED')
+             idempotency_key,publication_payload,published_at,status
+           ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,'PUBLISHED')
            RETURNING id`,
-          [packageRecordId,channel,externalReference,user.id,idempotencyKey,JSON.stringify(payload)],
+          [packageRecordId,channel,externalReference,user.id,idempotencyKey,JSON.stringify(payload),publishedAt],
+        );
+
+        const publicationObjectKey=`workspaces/${item.workspace_id}/agents/${item.registry_id}/versions/${item.version}/publications/${record.rows[0]!.id}.json`;
+        const publicationStorageBody=canonicalJson(payload);
+        const publicationStorageSha256=sha256Text(publicationStorageBody);
+        const publicationArtifact=await client.query<{id:string}>(
+          `INSERT INTO artifact_objects(
+             workspace_id,agent_version_id,kind,object_key,sha256,media_type,byte_size
+           ) VALUES ($1,$2,'PUBLICATION_PAYLOAD',$3,$4,'application/json',$5)
+           RETURNING id`,
+          [
+            item.workspace_id,item.agent_version_id,publicationObjectKey,publicationStorageSha256,
+            Buffer.byteLength(publicationStorageBody),
+          ],
+        );
+        await client.query(
+          `INSERT INTO operational_jobs(workspace_id,job_type,payload)
+           VALUES ($1,'STORE_ARTIFACT',$2::jsonb)`,
+          [
+            item.workspace_id,
+            JSON.stringify({
+              artifactObjectId:publicationArtifact.rows[0]!.id,
+              objectKey:publicationObjectKey,
+              content:payload,
+              expectedSha256:publicationStorageSha256,
+            }),
+          ],
         );
 
         const publicationObjectKey=`workspaces/${item.workspace_id}/agents/${item.registry_id}/versions/${item.version}/publications/${record.rows[0]!.id}.json`;
@@ -1614,10 +1665,41 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const registryUrl=process.env.FRANKAI_REGISTRY_URL;
     if(!registryUrl) return json(res,503,{error:"frankai_registry_not_configured"});
 
-    const payload=buildFrankAIRegistrationPayload({
-      publicationRecordId:publicationId,
-      publicationPayload:item.publication_payload,
-    });
+    let payload:any;
+    try {
+      payload=buildFrankAIRegistrationPayload({
+        publicationRecordId:publicationId,
+        publicationPayload:item.publication_payload,
+      });
+    } catch {
+      return json(res,409,{error:"registration_contract_incomplete"});
+    }
+
+    // Claim the stable external effect before leaving the local transaction.
+    // A different caller/key cannot create a second effect for this publication;
+    // a retry with the same key may safely resume an IN_FLIGHT/FAILED attempt.
+    try {
+      await transaction(async(client)=>{
+        await client.query(
+          `INSERT INTO frankai_registration_attempts(publication_record_id,idempotency_key,request_payload)
+           VALUES ($1,$2,$3::jsonb)
+           ON CONFLICT DO NOTHING`,
+          [publicationId,idempotencyKey,JSON.stringify(payload)],
+        );
+        const byPublication=await client.query<{idempotency_key:string;status:string}>(
+          "SELECT idempotency_key,status FROM frankai_registration_attempts WHERE publication_record_id=$1 FOR UPDATE",
+          [publicationId],
+        );
+        if(byPublication.rows[0]?.idempotency_key!==idempotencyKey) {
+          throw new Error("frankai_registration_already_exists");
+        }
+      });
+    } catch(error) {
+      if(error instanceof Error && error.message==="frankai_registration_already_exists") {
+        return json(res,409,{error:error.message});
+      }
+      throw error;
+    }
 
     let registryResponse:Response;
     try {
@@ -1627,6 +1709,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
         body:JSON.stringify(payload),
       });
     } catch {
+      await query(
+        "UPDATE frankai_registration_attempts SET status='FAILED',last_error=$2,updated_at=now() WHERE publication_record_id=$1",
+        [publicationId,"frankai_registry_unreachable"],
+      );
       return json(res,502,{error:"frankai_registry_unreachable"});
     }
 
@@ -1636,6 +1722,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     catch { responsePayload={raw:responseText}; }
 
     if(!registryResponse.ok) {
+      await query(
+        "UPDATE frankai_registration_attempts SET status='FAILED',response_payload=$2::jsonb,last_error=$3,updated_at=now() WHERE publication_record_id=$1",
+        [publicationId,JSON.stringify(responsePayload),`HTTP ${registryResponse.status}`],
+      );
       return json(res,502,{error:"frankai_registry_rejected",status:registryResponse.status,response:responsePayload});
     }
     const registrationReference=typeof responsePayload.registration_reference==="string"
@@ -1643,7 +1733,13 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
       : typeof responsePayload.id==="string"
         ? responsePayload.id
         : null;
-    if(!registrationReference) return json(res,502,{error:"frankai_registry_missing_reference"});
+    if(!registrationReference) {
+      await query(
+        "UPDATE frankai_registration_attempts SET status='FAILED',response_payload=$2::jsonb,last_error=$3,updated_at=now() WHERE publication_record_id=$1",
+        [publicationId,JSON.stringify(responsePayload),"missing registration reference"],
+      );
+      return json(res,502,{error:"frankai_registry_missing_reference"});
+    }
 
     try {
       const result=await transaction(async(client)=>{
@@ -1657,6 +1753,41 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
            ) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,'REGISTERED')
            RETURNING id`,
           [publicationId,registrationReference,idempotencyKey,JSON.stringify(payload),JSON.stringify(responsePayload)],
+        );
+
+        const registrationEvidence={request:payload,response:responsePayload,registrationReference};
+        const registrationObjectKey=`workspaces/${item.workspace_id}/agents/${item.registry_id}/versions/${item.version}/frankai/${record.rows[0]!.id}.json`;
+        const registrationStorageBody=canonicalJson(registrationEvidence);
+        const registrationStorageSha256=sha256Text(registrationStorageBody);
+        const registrationArtifact=await client.query<{id:string}>(
+          `INSERT INTO artifact_objects(
+             workspace_id,agent_version_id,kind,object_key,sha256,media_type,byte_size
+           ) VALUES ($1,$2,'FRANKAI_REGISTRATION',$3,$4,'application/json',$5)
+           RETURNING id`,
+          [
+            item.workspace_id,item.agent_version_id,registrationObjectKey,registrationStorageSha256,
+            Buffer.byteLength(registrationStorageBody),
+          ],
+        );
+        await client.query(
+          `INSERT INTO operational_jobs(workspace_id,job_type,payload)
+           VALUES ($1,'STORE_ARTIFACT',$2::jsonb)`,
+          [
+            item.workspace_id,
+            JSON.stringify({
+              artifactObjectId:registrationArtifact.rows[0]!.id,
+              objectKey:registrationObjectKey,
+              content:registrationEvidence,
+              expectedSha256:registrationStorageSha256,
+            }),
+          ],
+        );
+
+        await client.query(
+          `UPDATE frankai_registration_attempts
+           SET status='REGISTERED',response_payload=$2::jsonb,registration_reference=$3,updated_at=now()
+           WHERE publication_record_id=$1`,
+          [publicationId,JSON.stringify(responsePayload),registrationReference],
         );
 
         const registrationEvidence={request:payload,response:responsePayload,registrationReference};
@@ -1771,6 +1902,29 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     });
   }
 
+  if (req.method === "GET" && url.pathname === "/v1/transformations") {
+    const projectId = url.searchParams.get("projectId") || null;
+    if (projectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) return json(res,400,{error:"invalid_project_id"});
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0) return json(res,400,{error:"invalid_offset"});
+    const result = await query(
+      `SELECT t.id,t.requested_name,t.status,t.created_at::text,t.project_id,
+              p.name project_name,a.registry_id,av.version,av.status agent_version_status,
+              l.semantic_approval_status,l.evaluation_status,l.certification_status,
+              (SELECT parent_transformation_id FROM candidate_revision_lineage WHERE child_transformation_id=t.id) parent_transformation_id
+       FROM promptforge_transformations t
+       JOIN projects p ON p.id=t.project_id
+       JOIN workspace_memberships m ON m.workspace_id=p.workspace_id AND m.user_id=$1
+       LEFT JOIN agent_versions av ON av.id=t.agent_version_id
+       LEFT JOIN agents a ON a.id=av.agent_id
+       LEFT JOIN lifecycle_readiness l ON l.agent_version_id=av.id
+       WHERE ($2::uuid IS NULL OR t.project_id=$2::uuid)
+       ORDER BY t.created_at DESC,t.id DESC LIMIT 101 OFFSET $3`,
+      [user.id,projectId,offset],
+    );
+    return json(res,200,{submissions:result.rows.slice(0,100),nextOffset:result.rows.length>100?offset+100:null});
+  }
+
   const transformationMatch = /^\/v1\/transformations\/([0-9a-f-]+)$/.exec(url.pathname);
   if (req.method === "GET" && transformationMatch) {
     const transformationId = transformationMatch[1]!;
@@ -1851,7 +2005,13 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
        ORDER BY created_at`,
       [transformationId],
     );
+    const evaluationPlan = item.agent_version_id ? await query<{id:string}>(
+      "SELECT id FROM evaluation_plans WHERE agent_version_id=$1 ORDER BY created_at DESC LIMIT 1",
+      [item.agent_version_id],
+    ) : null;
     return json(res, 200, {
+      agentVersionId: item.agent_version_id,
+      evaluationPlanId: evaluationPlan?.rows[0]?.id ?? null,
       id: item.id,
       status: item.status,
       requestedName: item.requested_name,

@@ -27,5 +27,9 @@ jobs:
         run: pnpm typecheck
       - name: Build workspace
         run: pnpm build
+      - name: Verify capability prerequisite and evidence contracts
+        run: pnpm --filter @agent-foundry/promptforge test
+      - name: Verify contextual authority contract
+        run: node scripts/test_contextual_authority_contract.mjs
       - name: Verify PromptForge engine and OpenAI adapter
         run: node scripts/test_promptforge_engine.mjs
