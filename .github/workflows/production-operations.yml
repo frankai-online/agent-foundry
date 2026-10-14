@@ -126,6 +126,17 @@ jobs:
       - name: Verify backup and restore
         shell: bash
         run: |
+          printf '%s' "$DATABASE_URL" >/tmp/foundry-db-url
+          printf '%s' "$OBJECT_STORAGE_ACCESS_KEY" >/tmp/foundry-s3-access
+          printf '%s' "$OBJECT_STORAGE_SECRET_KEY" >/tmp/foundry-s3-secret
+          archive=$(
+            env -u DATABASE_URL -u OBJECT_STORAGE_ACCESS_KEY -u OBJECT_STORAGE_SECRET_KEY \
+              DATABASE_URL_FILE=/tmp/foundry-db-url \
+              OBJECT_STORAGE_ACCESS_KEY_FILE=/tmp/foundry-s3-access \
+              OBJECT_STORAGE_SECRET_KEY_FILE=/tmp/foundry-s3-secret \
+              BACKUP_ROOT=/tmp/foundry-backups \
+              sh ops/backup.sh
+          )
           archive=$(BACKUP_ROOT=/tmp/foundry-backups sh ops/backup.sh)
           sh ops/backup-verify.sh "$archive"
           createdb -h localhost -U foundry foundry_restore
@@ -137,6 +148,7 @@ jobs:
         run: |
           grep -q "Strict-Transport-Security" ops/Caddyfile
           grep -q "X-Frame-Options" ops/Caddyfile
+          grep -q "respond @metrics 404" ops/Caddyfile
           grep -q "handle /api/metrics" ops/Caddyfile
           grep -q "respond 404" ops/Caddyfile
           test -f docs/security/PHASE-7-SECURITY-REVIEW.md
