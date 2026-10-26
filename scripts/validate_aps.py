@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse, json, sys
 from pathlib import Path
 from jsonschema import Draft202012Validator, RefResolver
+from sufficiency_validation import validate_scoped_sufficiency
 
 ROOT=Path(__file__).resolve().parents[1]
 SCHEMA_DIR=ROOT/"schemas"/"aps"/"1.5-alpha"
@@ -35,6 +36,8 @@ INVARIANTS={
 "INV-023":"Consequential execution requires pre-execution consolidation.",
 "INV-024":"Clarification must be tied to explicit missing requirements.",
 "INV-025":"Model confidence cannot substitute for typed sufficiency state.",
+"INV-026":"Scoped candidate policy cannot imply external retrieval.",
+"INV-027":"Capability prerequisite branches preserve independent applicability.",
 }
 
 def load(p): return json.loads(Path(p).read_text())
@@ -47,6 +50,8 @@ def structural(doc):
 
 def semantic(doc):
     errs=[]
+    capabilities=doc.get("capabilities")
+    capabilities=capabilities if isinstance(capabilities,list) else []
     gov=doc.get("governance",{}); auth=gov.get("authority",{})
     recommendation=set(auth.get("recommendation",[])); execution=set(auth.get("execution",[])); delegation=set(auth.get("delegation",[]))
     prohibited=set(auth.get("prohibited",[]))
@@ -88,7 +93,8 @@ def semantic(doc):
         pec=suff.get("pre_execution_consolidation",{})
         required_info=ap.get("required_information",[]) if isinstance(ap,dict) else []
         clarification=ap.get("clarification",{}) if isinstance(ap,dict) else {}
-        if not required_info:
+        scoped = isinstance(ap,dict) and isinstance(ap.get("capability_requirements"),list) and bool(ap["capability_requirements"])
+        if not required_info and not scoped:
             errs.append("INV-024: answerability policy requires explicit required_information")
         if not isinstance(clarification,dict) or not clarification.get("ask_when") or not clarification.get("question_selection"):
             errs.append("INV-024: clarification policy must target explicit missing requirements")
@@ -101,7 +107,7 @@ def semantic(doc):
             isinstance(cap,dict)
             and isinstance(cap.get("side_effect_classes"),list)
             and "PROPOSED_CONSEQUENTIAL" in cap.get("side_effect_classes",[])
-            for cap in doc.get("capabilities",[])
+            for cap in capabilities
         )
         consequential=side_effect_consequential or capability_consequential
         required_components={
@@ -127,6 +133,8 @@ def semantic(doc):
             )
         if any(k in suff for k in ("authority","execution","delegation","permissions")):
             errs.append("INV-022: sufficiency contract cannot contain authority-bearing fields")
+
+    errs.extend(validate_scoped_sufficiency(doc))
 
     # INV-008 is enforced as a governance contract flag for imported content.
     if doc.get("imported_content") and gov.get("retrieved_content_is_data") is not True:
@@ -171,7 +179,7 @@ def semantic(doc):
             errs.append("INV-020: contextual authority requires credential isolation")
 
         capability_ids={
-            cap.get("id") for cap in doc.get("capabilities",[])
+            cap.get("id") for cap in capabilities
             if isinstance(cap,dict) and isinstance(cap.get("id"),str)
         }
         roles=cac.get("roles")

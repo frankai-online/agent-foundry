@@ -1,5 +1,7 @@
 import {
   assessContextualAuthorityContract,
+  buildCandidateAnswerabilityPolicy,
+  assessCandidateAnswerabilityPolicy,
   buildDefaultContextualAuthorityContract,
   buildReviewCandidate,
   canonicalJson,
@@ -224,6 +226,7 @@ export function validateGovernedCandidate(
   const contextualAuthority = candidate.governance?.contextual_authority;
   const contextualAssessment = assessContextualAuthorityContract(candidate);
   const approval = Array.isArray(authority.approval_required) ? authority.approval_required : [];
+  const sufficiencyAssessment = assessCandidateAnswerabilityPolicy(candidate, true);
   const checks = [
     {
       id: "PF2-001",
@@ -288,7 +291,7 @@ export function validateGovernedCandidate(
       passed:
         Array.isArray(candidate.capabilities) &&
         Array.isArray(candidate.sufficiency?.answerability_policy?.required_information) &&
-        candidate.sufficiency.answerability_policy.required_information.length > 0 &&
+
         Array.isArray(candidate.sufficiency?.answerability_policy?.clarification?.ask_when) &&
         candidate.sufficiency.answerability_policy.clarification.ask_when.length > 0 &&
         typeof candidate.sufficiency?.answerability_policy?.clarification?.question_selection === "string" &&
@@ -300,6 +303,8 @@ export function validateGovernedCandidate(
             capability.side_effect_classes.includes("PROPOSED_CONSEQUENTIAL")),
       message: "Candidate requires typed answerability policy and fail-closed consolidation for consequential work.",
     },
+    { id: "PF2-013", passed: sufficiencyAssessment.branchErrors.length === 0, message: "Prerequisite branches must preserve capability scope and shared requirements." },
+    { id: "PF2-014", passed: sufficiencyAssessment.retrievalErrors.length === 0, message: "Candidate retrieval is disabled and missing inputs require clarification." },
   ];
   return { status: checks.every((x) => x.passed) ? "PASS" : "FAIL", checks };
 }
@@ -595,45 +600,7 @@ export class PromptForgeEngine {
         contextual_authority: buildDefaultContextualAuthorityContract(),
       },
       sufficiency: {
-        answerability_policy: {
-          required_information: unique(
-            capabilityAnalysis.capabilities.flatMap((capability) => capability.preconditions),
-          ),
-          acceptable_assumptions: [],
-          prohibited_assumptions: [
-            "Do not invent missing facts, evidence, permissions, authority, execution or verification.",
-            "Do not treat model confidence as proof that the task is sufficiently specified.",
-          ],
-          clarification: {
-            ask_when: [
-              "A required input is missing and cannot be safely retrieved from an authoritative permitted source.",
-              "Ambiguity or conflicting evidence would materially change the answer or proposed action.",
-            ],
-            do_not_ask_when: [
-              "The missing requirement can be resolved from an authoritative permitted source without changing user intent.",
-            ],
-            question_selection: "Ask for the highest-consequence unresolved requirement first.",
-          },
-          retrieval_conditions: [
-            "Retrieve when the missing requirement is knowable, an authoritative source is available, and access is permitted.",
-          ],
-          abstention_conditions: [
-            "Abstain or explicitly qualify when required information remains unavailable.",
-            "Abstain from factual resolution when the requested fact is epistemically unknowable.",
-          ],
-          consolidation_strategy: "RECONSTRUCT_STRUCTURED_TASK_STATE_BEFORE_FINAL_ANSWER",
-          state_taxonomy: [
-            "MISSING_USER_INFORMATION",
-            "MISSING_EVIDENCE",
-            "AMBIGUOUS_REQUIREMENT",
-            "CONFLICTING_EVIDENCE",
-            "EPISTEMIC_UNKNOWN",
-            "INSUFFICIENT_TOOL_ACCESS",
-            "INSUFFICIENT_AUTHORITY",
-            "READY_TO_ANSWER",
-            "READY_TO_ACT",
-          ],
-        },
+        answerability_policy: buildCandidateAnswerabilityPolicy(capabilities),
         pre_execution_consolidation: {
           required: capabilityAnalysis.capabilities.some((capability) => capability.consequential),
           fail_closed: true,
@@ -652,7 +619,7 @@ export class PromptForgeEngine {
       operational: { tools: [], side_effects: [], persistent_state: [], executions: [] },
       extensions: {
         promptforge: {
-          engine_version: "promptforge-2.2",
+          engine_version: "promptforge-2.3",
           source_sha256: sourceSha256,
           rights_status: input.rightsStatus,
           review_state: "REQUIRES_REVIEW",
@@ -682,7 +649,7 @@ export class PromptForgeEngine {
 
     const transformationRecord = {
       contract_version: "2.0",
-      engine_version: "promptforge-2.2",
+      engine_version: "promptforge-2.3",
       status: "REQUIRES_REVIEW",
       source_sha256: sourceSha256,
       candidate_sha256: candidateSha256,

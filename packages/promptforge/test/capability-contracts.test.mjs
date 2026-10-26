@@ -15,7 +15,7 @@ test('capability contracts survive extraction, stage evidence and APS mapping wi
  assert.deepEqual(result.apsDocument.governance.authority.execution,[]);
  assert.deepEqual(result.apsDocument.governance.authority.delegation,[]);
  assert.deepEqual(result.apsDocument.operational.tools,[]);
- assert.equal(result.apsDocument.extensions.promptforge.engine_version,'promptforge-2.2');
+ assert.equal(result.apsDocument.extensions.promptforge.engine_version,'promptforge-2.3');
  assert.equal(result.apsDocument.governance.contextual_authority.authority_model,'contextual_least_privilege');
  assert.deepEqual(result.apsDocument.governance.contextual_authority.roles,[]);
  assert.equal(result.reviewPackage.validation.checks.find(x=>x.id==='PF2-010').passed,true);

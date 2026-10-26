@@ -1,3 +1,4 @@
+import { assertCurrentCredentialAuthorization } from "./credential-authorization.js";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { canonicalJson, sha256Text } from "@agent-foundry/domain";
 
@@ -679,6 +680,10 @@ export async function persistCredentialBrokerDecision(
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
       [evidenceId],
     );
+
+    if (decision.outcome === "AUTHORIZED") {
+      await assertCurrentCredentialAuthorization(client, decision.evidence);
+    }
 
     const action = decision.outcome === "AUTHORIZED"
       ? "credential_use_authorized"
