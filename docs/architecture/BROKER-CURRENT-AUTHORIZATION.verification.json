@@ -1,0 +1,32 @@
+{
+  "parent_candidate": "9073c44dc746aebbb5387b4daee46977c4c4f3a5",
+  "verified_at": "2026-10-26T10:52:53.911968+00:00",
+  "source_files_sha256": {
+    "packages/db/src/credential-authorization.ts": "bbd7f37e17ba58c5c1ef497e5d668754cd7bb69da2fdade9af3b423811b21091",
+    "packages/db/src/index.ts": "91de0ceaf35c3aa23a3732bcd9acb5eb73ae1de3552b89345c2529f5268eb997",
+    "scripts/test_credential_broker.mjs": "d4f963a9e57db6dfe2064c1b7eaad339df47a237fb7b02d60baa603f19b84089",
+    "docs/architecture/BROKER-CURRENT-AUTHORIZATION.md": "39211516305c00e094da0eea75d1c2973c1d815bda7dbac0573a7d790da25c97"
+  },
+  "baseline_defect_reproduced": true,
+  "build": "PASS",
+  "typecheck": "PASS",
+  "broker_integration_with_revocation_replay_disable_and_expiry_negatives": "PASS",
+  "deterministic_controlled_distribution": "PASS",
+  "workspace_tests": {
+    "total": 116,
+    "passed": 116,
+    "failed": 0,
+    "skipped": 0
+  },
+  "independent_source_review": "NO_BLOCKING_FINDINGS",
+  "migration_changes": false,
+  "production_changes": false,
+  "limits": [
+    "Current-state guard covers persistence API, not arbitrary direct SQL",
+    "No atomic fence from commit through external consumption"
+  ],
+  "test_setup_failures_resolved": [
+    "Seeded package/publication fixtures for DB claims tests",
+    "Isolated reclaim queue from synthetic storage retry jobs"
+  ]
+}

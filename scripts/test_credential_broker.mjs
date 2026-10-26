@@ -60,7 +60,9 @@ async function main() {
     [workspaceId,otherWorkspaceId],
   );
 
-  const decisionAt="2026-10-10T00:00:00.000Z";
+  const clock=await query("SELECT clock_timestamp() AS observed_at");
+  const decisionAt=new Date(Date.parse(clock.rows[0].observed_at)-120_000).toISOString();
+  const at=(seconds)=>new Date(Date.parse(decisionAt)+seconds*1000).toISOString();
   const resolution=resolveAuthority({
     contract,
     plan:{
@@ -73,7 +75,7 @@ async function main() {
       authorizationId:"broker-auth",
       roleId:"reader",
       mode:"AUTHORIZE_ROLE",
-      expiresAt:"2026-10-10T00:10:00.000Z"
+      expiresAt:at(600)
     }],
     now:decisionAt
   });
@@ -99,7 +101,7 @@ async function main() {
     token:issued.token,
     publicKeyPem,
     expectedKeyId:"broker-key-1",
-    now:"2026-10-10T00:01:00.000Z",
+    now:at(60),
     invocation:{
       taskId:"broker-task",
       planId:"broker-plan",
@@ -140,14 +142,16 @@ async function main() {
     null,
   );
 
+  let capturedAuthorization;
   const broker=await executeWithBrokeredCredential({
     workspaceId,
     enforcement:pep,
     persistedEnforcement:durablePep,
     currentTokenState:tokenState,
     credentialBinding:durableBinding,
-    now:"2026-10-10T00:01:01.000Z",
+    now:at(61),
     persistAuthorization:async(decision)=>{
+      capturedAuthorization=decision;
       const persisted=await persistCredentialBrokerDecision(decision);
       return {evidenceId:persisted.evidenceId,auditRecordId:persisted.auditRecordId};
     },
@@ -156,7 +160,7 @@ async function main() {
       assert.equal(input.credentialHandle,credentialBinding.credentialHandle);
       return {
         value:"integration-secret-token",
-        expiresAt:"2026-10-10T00:05:00.000Z"
+        expiresAt:at(300)
       };
     },
     consumeCredential:async(input)=>{
@@ -208,7 +212,54 @@ async function main() {
     /unexpected fields/
   );
 
+  // A second binding proves exact receipt replay cannot bypass disabling it.
+  const secondaryBinding={...credentialBinding,bindingId:"gmail.secondary.credential.v1"};
+  await persistCredentialBindingRecord(secondaryBinding);
+  let secondaryAuthorization;
+  const secondaryResult=await executeWithBrokeredCredential({
+    workspaceId,enforcement:pep,persistedEnforcement:durablePep,currentTokenState:tokenState,
+    credentialBinding:secondaryBinding,now:at(61),
+    persistAuthorization:async(value)=>{
+      secondaryAuthorization=value;
+      const saved=await persistCredentialBrokerDecision(value);
+      return {evidenceId:saved.evidenceId,auditRecordId:saved.auditRecordId};
+    },
+    resolveCredential:async()=>({value:"secondary-integration-only"}),
+    consumeCredential:async()=>({ok:true})
+  });
+  assert.equal(secondaryResult.outcome,"EXECUTED");
+  await setCredentialBindingStatus(workspaceId,secondaryBinding.bindingId,"DISABLED");
+  await assert.rejects(()=>persistCredentialBrokerDecision(secondaryAuthorization),/active durable binding/);
+
+  // The snapshot is historically valid, but the token is expired at database time.
+  const expired=issueCapabilityToken({resolution,privateKeyPem,keyId:"broker-key-1",now:decisionAt,ttlSeconds:30});
+  await persistCapabilityTokenRecord(expired);
+  const expiredState=await getCapabilityTokenState(expired.tokenSha256);
+  const expiredPep=enforceInvocation({
+    token:expired.token,publicKeyPem,expectedKeyId:"broker-key-1",now:at(10),
+    invocation:{taskId:"broker-task",planId:"broker-plan",sessionId:null,toolId:"gmail",operation:"messages.read"},
+    binding:{bindingId:"gmail.messages.read.v1",registrySha256:registrySha,toolId:"gmail",operation:"messages.read",requiredCapabilities:["mail.read"]},
+    persistedTokenState:expiredState
+  });
+  assert.equal(expiredPep.outcome,"ALLOW");
+  await persistPolicyEnforcementDecision(expiredPep);
+  let resolvedExpired=0;
+  const expiredResult=await executeWithBrokeredCredential({
+    workspaceId,enforcement:expiredPep,persistedEnforcement:await getPolicyEnforcementEvidenceRecord(expiredPep.evidenceId),
+    currentTokenState:expiredState,credentialBinding:durableBinding,now:at(11),
+    persistAuthorization:async(value)=>{
+      const saved=await persistCredentialBrokerDecision(value);
+      return {evidenceId:saved.evidenceId,auditRecordId:saved.auditRecordId};
+    },
+    resolveCredential:async()=>{resolvedExpired++;return {value:"must-not-resolve"};},
+    consumeCredential:async()=>({ok:true})
+  });
+  assert.equal(expiredResult.outcome,"FAILED");
+  assert.equal(expiredResult.evidence.reason,"authorization_audit_failed");
+  assert.equal(resolvedExpired,0);
+
   await revokeCapabilityToken(issued.tokenSha256,"integration revocation");
+  await assert.rejects(()=>persistCredentialBrokerDecision(capturedAuthorization),/active durable token/);
   let resolvedAfterRevocation=0;
   const revokedBetweenPepAndBroker=await executeWithBrokeredCredential({
     workspaceId,
@@ -216,7 +267,7 @@ async function main() {
     persistedEnforcement:durablePep,
     currentTokenState:tokenState,
     credentialBinding:durableBinding,
-    now:"2026-10-10T00:01:02.000Z",
+    now:at(62),
     persistAuthorization:async(decision)=>{
       const persisted=await persistCredentialBrokerDecision(decision);
       return {evidenceId:persisted.evidenceId,auditRecordId:persisted.auditRecordId};
@@ -241,7 +292,7 @@ async function main() {
     persistedEnforcement:durablePep,
     currentTokenState:tokenState,
     credentialBinding:disabled,
-    now:"2026-10-10T00:01:02.000Z",
+    now:at(62),
     persistAuthorization:async(decision)=>{
       const persisted=await persistCredentialBrokerDecision(decision);
       return {evidenceId:persisted.evidenceId,auditRecordId:persisted.auditRecordId};
