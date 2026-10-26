@@ -14,6 +14,8 @@
 | P7-G9 | Security review and HTTP security controls | IMPLEMENTED |
 | P7-G10 | Disaster recovery runbook | IMPLEMENTED |
 | P7-G11 | Production Operations CI | PASS / VERIFIED — run 37137855431 |
+| P7-G12 | Production deployment to foundry.frankai.online | BLOCKED — deployment channel unavailable; authorized workstation relay offline and no Production Deploy workflow run exists |
+| P7-G13 | Production acceptance / rollback evidence | BLOCKED — depends on successful live deployment |
 | P7-G12 | Production deployment to foundry.frankai.online | PASS / DEPLOYED / OBSERVED — Hostinger shared-ingress deployment on 2026-10-04; see deployment evidence |
 | P7-G13 | Production acceptance / rollback evidence | PASS / VERIFIED — HTTPS, login, monitoring, versioned storage, isolated restore and initial-deployment ingress rollback |
 
@@ -41,6 +43,15 @@ Repository evidence on head `ec8b4b90af5cb73d0429438bc53d1250de3fb14f`:
 Live deployment remains a separate unverified gate. No Production Deploy workflow run exists at this point, the authorized Remote Desktop Commander device is offline, and the public hostname could not be confirmed reachable from the current session.
 
 
+## Production Review Remediations
+
+The following P1 production-review findings are addressed in the Phase 7 branch and require exact-head CI confirmation:
+
+- expired `RUNNING` operational jobs are reclaimed through a bounded lease and dead-lettered when attempts are exhausted;
+- host-invoked backup loads `DATABASE_URL_FILE`, `OBJECT_STORAGE_ACCESS_KEY_FILE`, and `OBJECT_STORAGE_SECRET_KEY_FILE` before database/object export;
+- release versions are restricted to safe object-key segments before S3-key construction;
+- object-storage export independently rejects `.`, `..`, empty, backslash, and destination-escaping key segments;
+- regression coverage exercises expired-lease reclamation, file-mounted backup credentials, and traversal-style release-version rejection.
 ## Live deployment evidence — 4 October 2026
 
 The earlier relay-offline statements above describe the historical repository

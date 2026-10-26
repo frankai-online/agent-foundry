@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { URL } from "node:url";
 import { digestSessionToken, issueSessionToken, normalizeEmail, verifyPassword } from "@agent-foundry/auth";
 import { query, transaction } from "@agent-foundry/db";
+import { canonicalJson, sha256Text, type RightsStatus } from "@agent-foundry/domain";
 import { assessContextualAuthorityContract, canonicalJson, sha256Text, type RightsStatus } from "@agent-foundry/domain";
 import { assertSafeObjectKeySegment } from "@agent-foundry/storage";
 import {
@@ -1250,6 +1251,9 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     const releaseVersion=typeof body.releaseVersion==="string"?body.releaseVersion.trim():"";
     const idempotencyKey=typeof body.idempotencyKey==="string"?body.idempotencyKey.trim():"";
     if(!releaseVersion) return json(res,400,{error:"release_version_required"});
+    if(!/^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$/.test(releaseVersion) || releaseVersion.length>80) {
+      return json(res,400,{error:"invalid_release_version"});
+    }
     try { assertSafeObjectKeySegment(releaseVersion,"release_version"); }
     catch { return json(res,400,{error:"release_version_invalid"}); }
     if(idempotencyKey.length<8) return json(res,400,{error:"idempotency_key_required"});
@@ -1546,6 +1550,33 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
           ],
         );
 
+        const publicationObjectKey=`workspaces/${item.workspace_id}/agents/${item.registry_id}/versions/${item.version}/publications/${record.rows[0]!.id}.json`;
+        const publicationStorageBody=canonicalJson(payload);
+        const publicationStorageSha256=sha256Text(publicationStorageBody);
+        const publicationArtifact=await client.query<{id:string}>(
+          `INSERT INTO artifact_objects(
+             workspace_id,agent_version_id,kind,object_key,sha256,media_type,byte_size
+           ) VALUES ($1,$2,'PUBLICATION_PAYLOAD',$3,$4,'application/json',$5)
+           RETURNING id`,
+          [
+            item.workspace_id,item.agent_version_id,publicationObjectKey,publicationStorageSha256,
+            Buffer.byteLength(publicationStorageBody),
+          ],
+        );
+        await client.query(
+          `INSERT INTO operational_jobs(workspace_id,job_type,payload)
+           VALUES ($1,'STORE_ARTIFACT',$2::jsonb)`,
+          [
+            item.workspace_id,
+            JSON.stringify({
+              artifactObjectId:publicationArtifact.rows[0]!.id,
+              objectKey:publicationObjectKey,
+              content:payload,
+              expectedSha256:publicationStorageSha256,
+            }),
+          ],
+        );
+
         await client.query(
           `UPDATE lifecycle_readiness
            SET publication_status='PUBLISHED',updated_at=now()
@@ -1722,6 +1753,34 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
            ) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,'REGISTERED')
            RETURNING id`,
           [publicationId,registrationReference,idempotencyKey,JSON.stringify(payload),JSON.stringify(responsePayload)],
+        );
+
+        const registrationEvidence={request:payload,response:responsePayload,registrationReference};
+        const registrationObjectKey=`workspaces/${item.workspace_id}/agents/${item.registry_id}/versions/${item.version}/frankai/${record.rows[0]!.id}.json`;
+        const registrationStorageBody=canonicalJson(registrationEvidence);
+        const registrationStorageSha256=sha256Text(registrationStorageBody);
+        const registrationArtifact=await client.query<{id:string}>(
+          `INSERT INTO artifact_objects(
+             workspace_id,agent_version_id,kind,object_key,sha256,media_type,byte_size
+           ) VALUES ($1,$2,'FRANKAI_REGISTRATION',$3,$4,'application/json',$5)
+           RETURNING id`,
+          [
+            item.workspace_id,item.agent_version_id,registrationObjectKey,registrationStorageSha256,
+            Buffer.byteLength(registrationStorageBody),
+          ],
+        );
+        await client.query(
+          `INSERT INTO operational_jobs(workspace_id,job_type,payload)
+           VALUES ($1,'STORE_ARTIFACT',$2::jsonb)`,
+          [
+            item.workspace_id,
+            JSON.stringify({
+              artifactObjectId:registrationArtifact.rows[0]!.id,
+              objectKey:registrationObjectKey,
+              content:registrationEvidence,
+              expectedSha256:registrationStorageSha256,
+            }),
+          ],
         );
 
         await client.query(
