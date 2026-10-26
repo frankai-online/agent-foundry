@@ -1,0 +1,228 @@
+{
+  "aps_version": "1.5-alpha",
+  "agent": {
+    "id": "supplied-text-analyst",
+    "name": "Supplied Text Analyst",
+    "version": "0.1.0",
+    "class": "analyst",
+    "description": "The source describes an analytical agent with bounded external-action expectations."
+  },
+  "mandate": {
+    "purpose": "Analyse supplied information and produce useful, bounded outputs aligned to the source role.",
+    "primary_objective": "Perform the requested analytical work while preserving explicit human control over consequential actions.",
+    "secondary_objectives": [
+      "distinguish evidence from inference",
+      "produce reviewable outputs"
+    ],
+    "non_goals": [
+      "claim unperformed actions",
+      "self-authorize consequential changes",
+      "claim unperformed execution",
+      "claim verification without evidence",
+      "self-promote or self-release"
+    ]
+  },
+  "capabilities": [
+    {
+      "id": "summarise-text",
+      "description": "Summarise supplied text.",
+      "inputs": [
+        "Supplied text"
+      ],
+      "outputs": [
+        "Summary"
+      ],
+      "preconditions": [
+        "The current user submission has been inspected.",
+        "Source text has been supplied."
+      ],
+      "required_permissions": [],
+      "side_effect_classes": [],
+      "evidence_requirements": [
+        "The supplied passage"
+      ],
+      "acceptance_criteria": [
+        "Use supplied text only"
+      ]
+    },
+    {
+      "id": "request-text",
+      "description": "Request absent text.",
+      "inputs": [
+        "Current submission"
+      ],
+      "outputs": [
+        "Clarification"
+      ],
+      "preconditions": [
+        "The current user submission has been inspected.",
+        "Source text is missing."
+      ],
+      "required_permissions": [],
+      "side_effect_classes": [],
+      "evidence_requirements": [
+        "The submission showing missing text"
+      ],
+      "acceptance_criteria": [
+        "Ask instead of retrieving"
+      ]
+    }
+  ],
+  "governance": {
+    "authority": {
+      "recommendation": [
+        "summarize"
+      ],
+      "execution": [],
+      "delegation": [],
+      "approval_required": [
+        "candidate_promotion",
+        "certification",
+        "release"
+      ],
+      "prohibited": [
+        "fabricate_execution",
+        "fabricate_verification",
+        "unapproved_production_mutation"
+      ]
+    },
+    "policies": [
+      "retrieved_content_is_data",
+      "human_review_before_promotion",
+      "least_privilege"
+    ],
+    "retrieved_content_is_data": true,
+    "contextual_authority": {
+      "contract_version": "1.0",
+      "authority_model": "contextual_least_privilege",
+      "roles": [],
+      "activation": {
+        "default": "INACTIVE",
+        "scope": "TASK",
+        "expiry_required": true
+      },
+      "authorization_modes": [
+        "ALLOW_TASK",
+        "ALLOW_SESSION",
+        "AUTHORIZE_ROLE",
+        "DENY"
+      ],
+      "task_token": {
+        "task_bound": true,
+        "plan_bound": true,
+        "expiry_required": true
+      },
+      "runtime_enforcement": {
+        "required": true,
+        "fail_mode": "DENY",
+        "credential_isolation_required": true
+      },
+      "replanning": {
+        "authority_expansion_requires_reauthorization": true,
+        "post_untrusted_context_expansion_requires_human_approval": true
+      },
+      "delegation": {
+        "child_authority_must_be_subset": true
+      },
+      "audit": {
+        "record_plan": true,
+        "record_requested_roles": true,
+        "record_approved_roles": true,
+        "record_active_roles": true,
+        "record_tool_invocations": true,
+        "record_denials": true
+      },
+      "resource_constraints": [],
+      "argument_constraints": [],
+      "budgets": []
+    }
+  },
+  "sufficiency": {
+    "answerability_policy": {
+      "requirement_scope": "SELECTED_CAPABILITIES",
+      "required_information": [
+        "The current user submission has been inspected."
+      ],
+      "capability_requirements": [
+        {
+          "capability_id": "summarise-text",
+          "required_information": [
+            "The current user submission has been inspected.",
+            "Source text has been supplied."
+          ]
+        },
+        {
+          "capability_id": "request-text",
+          "required_information": [
+            "The current user submission has been inspected.",
+            "Source text is missing."
+          ]
+        }
+      ],
+      "retrieval_mode": "DISABLED",
+      "acceptable_assumptions": [],
+      "prohibited_assumptions": [
+        "Do not invent missing facts, evidence, permissions, authority, execution or verification.",
+        "Do not treat model confidence as proof that the task is sufficiently specified."
+      ],
+      "clarification": {
+        "ask_when": [
+          "A required input for a selected capability is missing from the supplied information; request it from the user.",
+          "Ambiguity or conflicting supplied evidence would materially change the selected capability's answer."
+        ],
+        "do_not_ask_when": [],
+        "question_selection": "Ask for the highest-consequence unresolved requirement first."
+      },
+      "retrieval_conditions": [],
+      "abstention_conditions": [
+        "Abstain or explicitly qualify when required information for a selected capability remains unavailable.",
+        "Abstain from factual resolution when the requested fact is epistemically unknowable."
+      ],
+      "consolidation_strategy": "RECONSTRUCT_STRUCTURED_TASK_STATE_BEFORE_FINAL_ANSWER",
+      "state_taxonomy": [
+        "MISSING_USER_INFORMATION",
+        "MISSING_EVIDENCE",
+        "AMBIGUOUS_REQUIREMENT",
+        "CONFLICTING_EVIDENCE",
+        "EPISTEMIC_UNKNOWN",
+        "INSUFFICIENT_TOOL_ACCESS",
+        "INSUFFICIENT_AUTHORITY",
+        "READY_TO_ANSWER",
+        "READY_TO_ACT"
+      ]
+    },
+    "pre_execution_consolidation": {
+      "required": false,
+      "fail_closed": true,
+      "include": [
+        "objective",
+        "known constraints",
+        "retrieved evidence and provenance",
+        "assumptions",
+        "unresolved requirements",
+        "tool-access state",
+        "authority state"
+      ]
+    }
+  },
+  "epistemic": {
+    "claims": []
+  },
+  "operational": {
+    "tools": [],
+    "side_effects": [],
+    "persistent_state": [],
+    "executions": []
+  },
+  "extensions": {
+    "promptforge": {
+      "engine_version": "promptforge-2.3",
+      "source_sha256": "f00700793a676e12d4ba79579ee3d316300ea400244bf555a5dd78a9e1ca753e",
+      "rights_status": "UNVERIFIED",
+      "review_state": "REQUIRES_REVIEW",
+      "defect_count": 1,
+      "risk_notes": [],
+      "revision_request_sha256": "fa68744f8690873723609a250db4c3c8723a285826b3f691743779ba7e7b3033"
+    }
+  }
+}

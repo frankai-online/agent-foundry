@@ -426,7 +426,6 @@
       "properties": {
         "required_information": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "$ref": "#/$defs/nonEmptyString"
           }
@@ -470,8 +469,100 @@
               "READY_TO_ACT"
             ]
           }
+        },
+        "requirement_scope": {
+          "const": "SELECTED_CAPABILITIES"
+        },
+        "retrieval_mode": {
+          "const": "DISABLED"
+        },
+        "capability_requirements": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "capability_id",
+              "required_information"
+            ],
+            "properties": {
+              "capability_id": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "required_information": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/nonEmptyString"
+                }
+              }
+            }
+          }
         }
-      }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "required_information": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "capability_requirements"
+          ],
+          "properties": {
+            "capability_requirements": {
+              "minItems": 1
+            }
+          }
+        }
+      ],
+      "dependentRequired": {
+        "requirement_scope": [
+          "retrieval_mode",
+          "capability_requirements"
+        ],
+        "retrieval_mode": [
+          "requirement_scope",
+          "capability_requirements"
+        ],
+        "capability_requirements": [
+          "requirement_scope",
+          "retrieval_mode"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "retrieval_mode"
+            ],
+            "properties": {
+              "retrieval_mode": {
+                "const": "DISABLED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "retrieval_conditions": {
+                "maxItems": 0
+              },
+              "clarification": {
+                "properties": {
+                  "do_not_ask_when": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "preExecutionConsolidation": {
       "type": "object",

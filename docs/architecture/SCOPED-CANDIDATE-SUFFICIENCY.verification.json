@@ -1,0 +1,49 @@
+{
+  "base_commit": "5e0b7dbf25023feafc82c90caa29f800b1009785",
+  "branch": "fix/branch-aware-sufficiency-20261026",
+  "verified_at": "2026-10-26T10:01:03.732809+00:00",
+  "source_files_sha256": {
+    ".github/workflows/aps-conformance.yml": "88f3806e957333a46a6c0d92337d09bd366ee305f13fc95ce7a544dd3c4a610d",
+    "docs/architecture/SCOPED-CANDIDATE-SUFFICIENCY.md": "bd12c0d827ad79cc7138fa3d140e3ee84e0189084a9825201e3d3d261d601c5d",
+    "packages/domain/src/index.ts": "c8ed390e9559cf847c65777b10d5dc74ad28377ecc015b6294129a52a4fc1bea",
+    "packages/domain/src/sufficiency.ts": "1c2dc2fed7dd4b7e302ef9e0db39da5c029c2957e6a8f073594f353ab54256f0",
+    "packages/promptforge/src/index.ts": "158b032a0ea1221fc6e422909844579afb066a0ebdabaef77cf5241bad481a28",
+    "packages/promptforge/test/capability-contracts.test.mjs": "d4cc335790a065e5fcd9e4013105893b620f0893ed4c41fffa0056f09048d2dc",
+    "packages/promptforge/test/scoped-sufficiency.test.mjs": "f11c56fa81ed9d62e7d0a9938472c8ec579aa6c47d81f3c0938e762c6c479efe",
+    "schemas/aps/1.5-alpha/common.schema.json": "c21e6f7bbd09652bc16f6255c836adead9fdc2e8d57a0bf1340455743784858d",
+    "scripts/sufficiency_validation.py": "cbc554b7349352a314ba0db6a82a743be574f28b4b0d607afddb679257c32c68",
+    "scripts/test_sufficiency_policy.py": "650373bf5603434ebaa46052a393376da260cf64244a4693f0e3ca4010bcfee4",
+    "scripts/validate_aps.py": "f0bf48694789195877cdaa58646bc6cc666ddb20e727889b13734830bff7317a",
+    "tests/fixtures/aps/1.5-alpha/invalid-scoped-duplicate-capability-branch.json": "b70689598912275503c9a3b6429c77127f855091e4007c58a0490616d25271b8",
+    "tests/fixtures/aps/1.5-alpha/invalid-scoped-flattened-capability-prerequisites.json": "17e26396b127c01bfd1a3799beb697dcfa6a21f61d02a101a999f8d350bfd7f9",
+    "tests/fixtures/aps/1.5-alpha/invalid-scoped-retrieval-clarification-conflict.json": "c009dbd37d943adb54025fe9d8582f299ea6814f150c6dda89bdeae0bd410815",
+    "tests/fixtures/aps/1.5-alpha/invalid-scoped-retrieval-conflict.json": "69289dea7bf0fc45f3b26728b59d61c661367fd9ab9c235b81e72b71afc7893b",
+    "tests/fixtures/aps/1.5-alpha/scoped-sufficiency-valid.json": "bf7d84d06496704c2caa619b1e8db0a3aee2510000d91008f5a1ca52b3dc14cc",
+    "tests/fixtures/promptforge/sufficiency/recorded-no-retrieval-revision.json": "c54f9fafc07f8b6977f076f883ea3d98f8e7fbcb3848d7695ea70a9848006e13"
+  },
+  "source_snapshot_sha256": "8d9c1bd2ed205c647374feda4a0dc8703619a5266237d344fd6955dca265bcf8",
+  "verification": {
+    "build": "PASS",
+    "typecheck": "PASS",
+    "workspace_node_tests": 116,
+    "workspace_test_result": "PASS",
+    "scoped_node_tests": 20,
+    "python_policy_test_methods": 4,
+    "negative_aps_fixtures_rejected": 26,
+    "legacy_positive_aps_fixtures": "PASS",
+    "python_robustness": "PASS",
+    "saved_revision_offline_replay": "PASS",
+    "replayed_aps_python_validation": "PASS",
+    "git_diff_check": "PASS",
+    "independent_source_review": "NO_BLOCKING_FINDINGS"
+  },
+  "external_model_calls": 0,
+  "production_modified": false,
+  "existing_candidates_modified": false,
+  "commit_push_or_deploy_performed": false,
+  "limitations": [
+    "Closed candidate profile does not detect arbitrary natural-language contradictions",
+    "Capability selection is a specification boundary, not a new runtime selector",
+    "Legacy APS keep historical validation semantics; no retroactive consistency claim"
+  ]
+}

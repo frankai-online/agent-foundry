@@ -1,3 +1,4 @@
+export { buildCandidateAnswerabilityPolicy, assessCandidateAnswerabilityPolicy } from "./sufficiency.js";
 import { createHash } from "node:crypto";
 
 export type RightsStatus = "VERIFIED" | "UNVERIFIED" | "RESTRICTED" | "PROHIBITED";
