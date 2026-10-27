@@ -2,7 +2,9 @@
 
 The authoritative source-control boundary for Agent Foundry V1 is:
 
-`https://github.com/frankai-online/agent-foundry`
+`https://github.com/frankai-online/foundry.frankai.online`
+
+The repository was renamed from `frankai-online/agent-foundry` for naming consistency. Repository identity and history remain continuous; internal package, service, storage and runtime identifiers using `agent-foundry` are unchanged unless separately migrated.
 
 This repository is the canonical source of truth for application code, APS schemas and extensions, PromptForge, compiler and evaluator implementations, migrations, tests, infrastructure definitions, architecture decisions, configuration templates and release history.
 
