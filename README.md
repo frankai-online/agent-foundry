@@ -72,7 +72,7 @@ The bootstrap account is controlled by `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_AD
 
 ## Governance
 
-The canonical repository is `https://github.com/frankai-online/agent-foundry`.
+The canonical repository is `https://github.com/frankai-online/foundry.frankai.online`.
 
 Protected `main` requires the Phase Zero integrity checks. See:
 

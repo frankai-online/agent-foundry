@@ -4,7 +4,7 @@ Status: ACTIVE
 
 | Gate | Criterion | Evidence | Status |
 |---|---|---|---|
-| G0 | Canonical private repository established | Ray-Wooler/agent-foundry | PASS |
+| G0 | Canonical private repository established | frankai-online/foundry.frankai.online | PASS |
 | G0 | Default branch governed by active ruleset | Protect Main ruleset 24352789 | VERIFIED |
 | G0 | Phase Zero work isolated from main | feat/phase-zero-foundation + PR #1 | PASS |
 | G1 | Product boundary defined | ADR-0001 | PASS |

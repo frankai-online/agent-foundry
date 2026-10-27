@@ -61,4 +61,4 @@ Costs:
 
 ## Source-control boundary
 
-The authoritative implementation is the `frankai-online/agent-foundry` repository. Changes are delivered through reviewed branches and CI evidence.
+The authoritative implementation is the `frankai-online/foundry.frankai.online` repository. Changes are delivered through reviewed branches and CI evidence.
